@@ -72,6 +72,35 @@ describe CfnParser do
     end
   end
 
+  context 'a security group with one ingress with -1 IP protocol' do
+    it 'returns a size-1 collection of SecurityGroup object with size-1 collection of ingress rules' do
+      expected_security_groups = [
+          security_group_with_one_ingress_rule_ipprotocol
+      ]
+
+      test_templates('security_group/valid_security_group_with_single_ingress_ip_protocol').each do |test_template|
+        cfn_model = @cfn_parser.parse IO.read(test_template)
+
+        expect(cfn_model.security_groups).to eq expected_security_groups
+      end
+    end
+  end
+
+
+  context 'a stand alone ingress with -1 IP Protocol' do
+    it 'returns a size-1 collection of SecurityGroupIngress rules' do
+      expected_security_groups = [
+          standalone_ingress_rule_ip_protocol
+      ]
+
+      test_templates('security_group/valid_standalone_ingress_ipprotocol').each do |test_template|
+        cfn_model = @cfn_parser.parse IO.read(test_template)
+
+        expect(cfn_model.standalone_ingress).to eq expected_security_groups
+      end
+    end
+  end
+
   context 'a security group with two externalized ingress' do
     it 'returns a size-1 collection of SecurityGroup object with size-1 collection of ingress rules' do
       expected_security_groups = [
@@ -225,4 +254,47 @@ describe CfnParser do
       end
     end
   end
-end
+
+  context 'a security group with one egress with -1 IP protocol' do
+    it 'returns a size-1 collection of SecurityGroup object with size-1 collection of egress rules' do
+      expected_security_groups = [
+          security_group_with_one_egress_rule_ipprotocol
+      ]
+
+      yaml_test_templates('security_group/valid_security_group_with_single_egress_ip_protocol').each do |test_template|
+        cfn_model = @cfn_parser.parse IO.read(test_template)
+
+        expect(cfn_model.security_groups).to eq expected_security_groups
+      end
+    end
+  end
+
+
+  context 'a stand alone egress with -1 IP Protocol' do
+    it 'returns a size-1 collection of SecurityGroupEgress rules' do
+      expected_security_groups = [
+          standalone_egress_rule_ip_protocol
+      ]
+
+      yaml_test_templates('security_group/valid_standalone_egress_ipprotocol').each do |test_template|
+        cfn_model = @cfn_parser.parse IO.read(test_template)
+
+        expect(cfn_model.standalone_egress).to eq expected_security_groups
+      end
+    end
+  end
+
+  context 'egresses are parameterized', :synth do
+    it 'maps the Fn::If to a hash and skips objectification of it' do
+      yaml_test_templates('security_group/security_group_with_parameterized_egress').each do |test_template|
+        cfn_model = @cfn_parser.parse IO.read(test_template),
+                                      IO.read('spec/test_templates/yaml/security_group/egress.json')
+
+
+        puts cfn_model.resources['sg2'].egresses
+        expect(cfn_model.resources['sg2'].egresses.first.cidrIp).to eq '1.2.3.4/24'
+        expect(cfn_model.resources['sg1'].egresses.first.cidrIp).to eq '0.0.0.0/0'
+      end
+    end
+  end 
+end#

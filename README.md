@@ -38,8 +38,18 @@ The raw Hash output of `YAML.load` is also available from `CfnModel`.
     
     cfn_model.resources_by_type('AWS::IAM::User').each do |iam_user|
        # interrogate the iam_user
-    end  
-    
+    end
+
+## With Line Number Tracking
+
+    require 'cfn-model'
+
+    cfn_model = CfnParser.parse IO.read('some_cloudformation_template.yml'), nil, true
+
+    cfn_model.resources_by_type('AWS::IAM::User').each do |iam_user|
+       # interrogate the iam_user
+    ende
+
 ## Built-in Model Elements
     
 ## Unanticipated Model Elements
@@ -62,6 +72,10 @@ would yield an object:
       time_travel_machine = cfn_model.resources_by_type('AWS::TimeTravel::Machine').first
       expect(time_travel_machine.fuel).to eq 'dilithium'
       
+# Tests
+
+- run `rake spec` to execute serverspec tests
+
 # Deeper Dive
 
 ## Parsing
@@ -76,3 +90,4 @@ would yield an object:
 
 * Need to ponder a more general treatment for Refs 
 * Interesting to ponder doing analysis against a template combined with externally supplied Parameter values
+* Required attributes keep becoming optional... need to find way to bring validation in line with authoritative rules
