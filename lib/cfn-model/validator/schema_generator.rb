@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require_relative 'resource_type_validator'
 require 'yaml'
 
@@ -37,10 +39,10 @@ class SchemaGenerator
     return {} if cloudformation_hash['Parameters'].nil?
 
     parameters_schema = {
-      '=' => { 'type' => 'any'}
+      '=' => { 'type' => 'any' }
     }
 
-    cloudformation_hash['Parameters'].each do |parameter_key, parameter|
+    cloudformation_hash['Parameters'].each do |parameter_key, _|
       parameters_schema[parameter_key] = {
         'type' => 'map',
         'mapping' => {
@@ -58,7 +60,7 @@ class SchemaGenerator
 
   def generate_schema_for_resource_keys(cloudformation_hash)
     resources_schema = {
-      '=' => { 'type' => 'any'}
+      '=' => { 'type' => 'any' }
     }
 
     cloudformation_hash['Resources'].each do |resource_id, resource|

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 Dir["#{__dir__}/*_parser.rb"].each { |model| require "cfn-model/parser/#{File.basename(model, '.rb')}" }
 
 class ParserRegistry
@@ -15,9 +17,14 @@ class ParserRegistry
       'AWS::IAM::Role' => IamRoleParser,
       'AWS::IAM::Policy' => WithPolicyDocumentParser,
       'AWS::IAM::ManagedPolicy' => WithPolicyDocumentParser,
+      'AWS::KMS::Key' => KmsKeyParser,
+      'AWS::Lambda::Function' => LambdaFunctionParser,
       'AWS::S3::BucketPolicy' => WithPolicyDocumentParser,
       'AWS::SNS::TopicPolicy' => WithPolicyDocumentParser,
-      'AWS::SQS::QueuePolicy' => WithPolicyDocumentParser
+      'AWS::SQS::QueuePolicy' => WithPolicyDocumentParser,
+      'AWS::ApiGateway::Stage' => ApiGatewayStageParser,
+      'AWS::ApiGateway::Deployment' => ApiGatewayDeploymentParser,
+      'AWS::EC2::NetworkAcl' => Ec2NetworkAclParser
     }
   end
 

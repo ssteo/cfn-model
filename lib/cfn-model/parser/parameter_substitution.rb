@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'json'
 
 class ParameterSubstitution
@@ -31,6 +33,33 @@ class ParameterSubstitution
     end
   end
 
+  def apply_pseudo_parameter_values(cfn_model, parameter_values)
+    # leave out 'AWS::NoValue'? not sure - we explicitly check it in some places...
+    # might make sense to substitute here?
+    pseudo_function_defaults = {
+      'AWS::URLSuffix' => 'amazonaws.com',
+      'AWS::Partition' => 'aws',
+      'AWS::NotificationARNs' => '',
+      'AWS::AccountId' => '111111111111',
+      'AWS::Region' => 'us-east-1',
+      'AWS::StackId' => 'arn:aws:cloudformation:us-east-1:111111111111:stack/stackname/51af3dc0-da77-11e4-872e-1234567db123',
+      'AWS::StackName' => 'stackname',
+      'AWS::NumberAZs' => 2
+    }
+    pseudo_function_defaults.each do |function_name, default_value|
+      parameter = Parameter.new
+      parameter.id = function_name
+      parameter.type = 'String'
+      cfn_model.parameters[function_name] = parameter
+
+      if parameter_values[PARAMETERS].has_key?(function_name)
+        parameter.synthesized_value = parameter_values[PARAMETERS][function_name]
+      else
+        parameter.synthesized_value = default_value
+      end
+    end
+  end
+
   def apply_parameter_values_impl(cfn_model, parameter_values)
     parameter_values[PARAMETERS].each do |parameter_name, parameter_value|
       if cfn_model.parameters.has_key?(parameter_name)
@@ -48,6 +77,7 @@ class ParameterSubstitution
         parameter.synthesized_value = parameter.default.to_s
       end
     end
+    apply_pseudo_parameter_values(cfn_model, parameter_values)
   end
 
   def is_aws_format?(parameter_values)

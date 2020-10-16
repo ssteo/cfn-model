@@ -1,7 +1,13 @@
+# frozen_string_literal: true
+
 require_relative 'references'
 
 module AWS
   module CloudFormation
+
+  end
+
+  module CloudFront
 
   end
 
@@ -21,6 +27,14 @@ module AWS
 
   end
 
+  module KMS
+
+  end
+
+  module Lambda
+
+  end
+
   module S3
 
   end
@@ -33,11 +47,7 @@ module AWS
 
   end
 
-  module Lambda
-
-  end
-
-  module CloudFront
+  module ApiGateway
 
   end
 end

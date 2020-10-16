@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'yaml'
 require 'psych'
 require 'json'
@@ -10,6 +12,7 @@ require 'cfn-model/monkey_patches/psych/nodes/node'
 require_relative 'parser_registry'
 require_relative 'parameter_substitution'
 require_relative 'parser_error'
+require_relative 'expression_evaluator'
 Dir["#{__dir__}/../model/*.rb"].each { |model| require "cfn-model/model/#{File.basename(model, '.rb')}" }
 
 ##
@@ -36,10 +39,13 @@ class CfnParser
   ##
   # Given raw json/yml CloudFormation template, returns a CfnModel object
   # or raise ParserErrors if something is amiss with the format
-  def parse(cloudformation_yml, parameter_values_json=nil, with_line_numbers=false)
-    cfn_model = parse_without_parameters(cloudformation_yml, with_line_numbers)
+  def parse(cloudformation_yml, parameter_values_json=nil, with_line_numbers=false, condition_values_json=nil)
+    cfn_model = parse_without_parameters(cloudformation_yml, with_line_numbers, condition_values_json)
 
     apply_parameter_values(cfn_model, parameter_values_json)
+
+    # pass 2: tie together separate resources only where necessary to make life easier for rule logic
+    post_process_resource_model_elements cfn_model
 
     cfn_model
   end
@@ -52,7 +58,7 @@ class CfnParser
     ToRubyWithLineNumbers.create.accept(handler.root).first
   end
 
-  def parse_without_parameters(cloudformation_yml, with_line_numbers=false)
+  def parse_without_parameters(cloudformation_yml, with_line_numbers=false, condition_values_json=nil)
     pre_validate_model cloudformation_yml
 
     cfn_hash =
@@ -71,6 +77,10 @@ class CfnParser
     cfn_model = CfnModel.new
     cfn_model.raw_model = cfn_hash
 
+    process_conditions cfn_hash, cfn_model, condition_values_json
+
+    process_mappings cfn_hash, cfn_model
+
     # pass 1: wire properties into ModelElement objects
     if with_line_numbers
       transform_hash_into_model_elements_with_numbers cfn_hash, cfn_model
@@ -78,14 +88,40 @@ class CfnParser
       transform_hash_into_model_elements cfn_hash, cfn_model
     end
     transform_hash_into_parameters cfn_hash, cfn_model
+    transform_hash_into_globals cfn_hash, cfn_model
 
-    # pass 2: tie together separate resources only where necessary to make life easier for rule logic
-    post_process_resource_model_elements cfn_model
+
 
     cfn_model
   end
 
   private
+
+  def process_mappings(cfn_hash, cfn_model)
+    if cfn_hash.key?('Mappings')
+      cfn_hash['Mappings'].each do |mapping_key, mapping_value|
+        cfn_model.mappings[mapping_key] = mapping_value
+      end
+    end
+  end
+
+  def process_conditions(cfn_hash, cfn_model, condition_values_json)
+    if cfn_hash.key?('Conditions')
+      if condition_values_json.nil?
+        condition_values = {}
+      else
+        condition_values = JSON.load condition_values_json
+      end
+
+      cfn_hash['Conditions'].each do |condition_key, _|
+        if condition_values.key?(condition_key) && [true, false].include?(condition_values[condition_key])
+          cfn_model.conditions[condition_key] = condition_values[condition_key]
+        else
+          cfn_model.conditions[condition_key] = true
+        end
+      end
+    end
+  end
 
   def apply_parameter_values(cfn_model, parameter_values_json)
     ParameterSubstitution.new.apply_parameter_values(
@@ -117,7 +153,7 @@ class CfnParser
       resource_object.resource_type = resource['Type']
       resource_object.metadata = resource['Metadata']
 
-      assign_fields_based_upon_properties resource_object, resource
+      assign_fields_based_upon_properties resource_object, resource, cfn_model
 
       cfn_model.resources[resource_name] = resource_object
     end
@@ -133,7 +169,7 @@ class CfnParser
       resource_object.resource_type = resource['Type']['value']
       resource_object.metadata = resource['Metadata']
 
-      assign_fields_based_upon_properties resource_object, resource
+      assign_fields_based_upon_properties resource_object, resource, cfn_model
 
       cfn_model.resources[resource_name] = resource_object
       cfn_model.line_numbers[resource_name] = resource['Type']['line']
@@ -142,7 +178,7 @@ class CfnParser
   end
 
   def transform_hash_into_parameters(cfn_hash, cfn_model)
-    return cfn_model unless cfn_hash.has_key?('Parameters')
+    return cfn_model unless cfn_hash.key?('Parameters')
 
     cfn_hash['Parameters'].each do |parameter_name, parameter_hash|
       parameter = Parameter.new
@@ -155,6 +191,22 @@ class CfnParser
       end
 
       cfn_model.parameters[parameter_name] = parameter
+    end
+    cfn_model
+  end
+
+  def transform_hash_into_globals(cfn_hash, cfn_model)
+    return cfn_model unless cfn_hash.key?('Globals')
+
+    cfn_hash['Globals'].each do |resource, parameter_hash|
+      global = Parameter.new
+      global.id = resource
+
+      parameter_hash.each do |property_name, property_value|
+        global.send("#{map_property_name_to_attribute(property_name)}=", property_value)
+      end
+
+      cfn_model.globals[resource] = global
     end
     cfn_model
   end
@@ -173,10 +225,31 @@ class CfnParser
     end
   end
 
-  def assign_fields_based_upon_properties(resource_object, resource)
+  def deal_with_conditional_property_definitions(resource, cfn_model)
+    all_extra_concrete_properties = []
+    resource['Properties'].each do |property_name, property_value|
+      next if %w(Fn::Transform).include? property_name
+      if property_name == 'Fn::If'
+        concrete_properties = ExpressionEvaluator.new.evaluate(
+          {'Fn::If'=>property_value},
+          cfn_model.conditions
+        )
+        all_extra_concrete_properties << concrete_properties
+      end
+    end
+    all_extra_concrete_properties.each do |extra_concrete_properties|
+      resource['Properties'].merge!(extra_concrete_properties)
+    end
+    resource['Properties'].delete('Fn::If')
+  end
+
+  def assign_fields_based_upon_properties(resource_object, resource, cfn_model)
     unless resource['Properties'].nil?
+      deal_with_conditional_property_definitions(resource, cfn_model)
+
       resource['Properties'].each do |property_name, property_value|
-        resource_object.send("#{map_property_name_to_attribute(property_name)}=", property_value)
+        next if %w(Fn::Transform).include? property_name
+        resource_object.send("#{map_property_name_to_attribute(property_name)}=", map_property_value(property_value, cfn_model))
       end
     end
   end
@@ -191,22 +264,40 @@ class CfnParser
     resource_class
   end
 
+  def map_property_value(property_value, cfn_model)
+    ExpressionEvaluator.new.evaluate(property_value, cfn_model.conditions)
+  end
+
   def map_property_name_to_attribute(str)
     (str.slice(0).downcase + str[1..(str.length)]).gsub /-/, '_'
+  end
+
+  ##
+  # strip any characters that are legal in a resource name that
+  # are going to make for a legal character in a ruby class name
+  def clean_module_name(module_name)
+    module_name.gsub /[\-@]/, ''
+  end
+
+  def map_non_aws_resource_name_to_class_name(module_names)
+    # this is a little hacky.  we've been ignoring Custom so more for
+    # backward compat. for Alexa and other transformed resources just jam the whole
+    # thing together
+    if module_names.first == 'Custom'
+      first_module_index = 1
+    else
+      first_module_index = 0
+    end
+    module_names[first_module_index..-1].reduce('') do |class_name, module_name|
+      class_name + initial_upper(clean_module_name(module_name))
+    end
   end
 
   def generate_resource_class_from_type(type_name)
     resource_class = Class.new(ModelElement)
 
     module_names = type_name.split('::')
-    if module_names.first == 'Custom'
-      custom_resource_class_name = initial_upper(module_names[1])
-      begin
-        resource_class = Object.const_get custom_resource_class_name
-      rescue NameError
-        Object.const_set(custom_resource_class_name, resource_class)
-      end
-    elsif module_names.first == 'AWS'
+    if module_names.first == 'AWS'
       begin
         module_constant = AWS.const_get(module_names[1])
       rescue NameError
@@ -215,7 +306,13 @@ class CfnParser
       end
       module_constant.const_set(module_names[2], resource_class)
     else
-      raise "Unknown namespace in resource type: #{module_names.first}"
+      custom_resource_class_name = map_non_aws_resource_name_to_class_name(module_names)
+      begin
+        custom_class = Object.const_get custom_resource_class_name
+        resource_class = custom_class if custom_class.is_a?(ModelElement)
+      rescue NameError
+        Object.const_set(custom_resource_class_name, resource_class)
+      end
     end
     resource_class
   end

@@ -189,4 +189,132 @@ END
       }.to raise_error JSON::ParserError
     end
   end
+
+  context 'a template with Fn::Transform under Properties' do
+    it 'ignores' do
+      cloudformation_yml = <<END
+---
+Resources:
+  newResource:
+    Type: "AWS::TimeTravel::Machine"
+    Properties:
+      'Fn::Transform':
+        Name: 'AWS::Include'
+        Parameters:
+          Location: include.yml
+      Fuel: dilithium
+END
+      cfn_model = @cfn_parser.parse cloudformation_yml
+
+      expect(cfn_model.resources.size).to eq 1
+
+      time_travel_machine = cfn_model.resources_by_type('AWS::TimeTravel::Machine').first
+      expect(time_travel_machine.is_a?(ModelElement)).to eq true
+      expect(time_travel_machine.fuel).to eq 'dilithium'
+    end
+  end
+
+  context 'a template with alexa resource type' do
+    it 'returns model with parameters' do
+      cloudformation_yml = <<END
+---
+Resources:
+  alexaResource:
+    Type: "Alexa::ASK::Skill"
+    Properties:
+      SkillPackage:
+        S3Bucket: foo-bucket
+        S3Key: bar.zip
+      VendorId: foobar
+END
+      cfn_model = @cfn_parser.parse cloudformation_yml
+      alexa_ask_skill = cfn_model.resources_by_type('Alexa::ASK::Skill').first
+
+      expect(alexa_ask_skill.class.name).to eq 'AlexaASKSkill'
+      expect(cfn_model.resources.size).to eq 1
+      expect(alexa_ask_skill.is_a?(ModelElement)).to eq true
+      expect(alexa_ask_skill.logical_resource_id).to eq 'alexaResource'
+      expect(alexa_ask_skill.resource_type).to eq 'Alexa::ASK::Skill'
+      expect(alexa_ask_skill.skillPackage['S3Bucket']).to eq 'foo-bucket'
+      expect(alexa_ask_skill.skillPackage['S3Key']).to eq 'bar.zip'
+      expect(alexa_ask_skill.vendorId).to eq 'foobar'
+    end
+  end
+
+  context 'a template with foo resource type' do
+    it 'returns model with parameters' do
+      cloudformation_yml = <<END
+---
+Resources:
+  fooResource:
+    Type: "Foo::Bar::B-a@z"
+    Properties:
+      foo:
+        bar: baz
+END
+
+      cfn_model = @cfn_parser.parse cloudformation_yml
+      foo_bar_baz = cfn_model.resources_by_type('Foo::Bar::B-a@z').first
+
+      expect(foo_bar_baz.class.name).to eq 'FooBarBaz'
+      expect(foo_bar_baz.foo).to eq({'bar' => 'baz'})
+    end
+  end
+
+  context 'a template with fn:if for whole of Properties' do
+    it 'returns model without properties for that resource and doesnt throw exception' do
+      cloudformation_yml = <<END
+---
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  RestoreSecretString:
+    Type: String
+    NoEcho: true
+    Default: none
+Conditions:
+  IsNone: !Or
+    - !Equals
+      - !Ref RestoreSecretString
+      - none
+    - !Equals
+      - !Ref RestoreSecretString
+      - ""
+Resources:
+  AppDbSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    Properties: !If
+      - IsNone
+      - Description: 'New'
+        GenerateSecretString:
+          SecretStringTemplate: '{"username": "test-user"}'
+          GenerateStringKey: "password"
+          PasswordLength: 30
+          ExcludeCharacters: '"@/\'
+      - Description: 'Restore'
+        SecretString: !Ref 'RestoreSecretString'
+END
+
+      cfn_model = @cfn_parser.parse cloudformation_yml
+      secret = cfn_model.resources_by_type('AWS::SecretsManager::Secret').first
+      expected_description = 'New'
+      expected_generate_secret_string = {
+          'SecretStringTemplate' => '{"username": "test-user"}',
+          'GenerateStringKey' => "password",
+          'PasswordLength' => 30,
+          'ExcludeCharacters' => '"@/'
+      }
+      expect(secret.description).to eq expected_description
+      expect(secret.generateSecretString).to eq expected_generate_secret_string
+
+      cfn_model = @cfn_parser.parse cloudformation_yml, nil, false,'{"IsNone": false}'
+      secret = cfn_model.resources_by_type('AWS::SecretsManager::Secret').first
+      expected_description = 'Restore'
+      expected_secret_string = {
+        'Ref' => 'RestoreSecretString'
+      }
+      expect(secret.description).to eq expected_description
+      expect(secret.secretString).to eq expected_secret_string
+    end
+  end
 end
